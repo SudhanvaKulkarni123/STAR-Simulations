@@ -32,6 +32,19 @@ class Time(Units):
             self.name = "s"
             self.magnitude = self.magnitude*3600
 
+
+class Unit:
+
+    def __init__(self, UnitName = None):
+ 
+        self.name = UnitName
+ 
+    def show_course(self):
+ 
+        name = self.name()
+ 
+        print(f'We have a course named {name}')
+        print(f'its price is {name.Fee()}')
         
 class Length(Units):
     def __init__(self, name, magnitude):
