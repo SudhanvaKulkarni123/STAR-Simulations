@@ -50,7 +50,10 @@ def check_probability(func):
     
     return
 
-check_probability(euler)
+def expected_performance(func, ranges):
+    for i in range(len(ranges)):
+        
+
 
 
 
