@@ -1,192 +1,105 @@
 import numpy as np
 import matplotlib.pyplot as plt
 from sklearn import neighbors
-from tqdm import tqdm
 
-MAX_PARTICLES = 125
-DOMAIN_WIDTH = 40
-DOMAIN_HEIGHT = 80
 
-PARTICLE_MASS = 1
-ISOTROPIC_EXPONENT = 20
+DOMAIN_WIDTH = 500
+DOMAIN_HEIGHT = 800
 BASE_DENSITY = 1
-SMOOTHING_LENGTH = 5
-DYNAMIC_VISCOSITY = 0.5
-DAMPING_COEFFICIENT = - 0.9
-CONSTANT_FORCE = np.array([[0.0, -0.1]])
-
-TIME_STEP_LENGTH = 0.01
-N_TIME_STEPS = 2_500
-ADD_PARTICLES_EVERY = 50
-
 FIGURE_SIZE = (4, 6)
 PLOT_EVERY = 6
-SCATTER_DOT_SIZE = 2_000
+SCATTER_DOT_SIZE = 200
 
-DOMAIN_X_LIM = np.array([
-    SMOOTHING_LENGTH,
-    DOMAIN_WIDTH - SMOOTHING_LENGTH,
-])
-DOMAIN_Y_LIM = np.array([
-    SMOOTHING_LENGTH,
-    DOMAIN_HEIGHT - SMOOTHING_LENGTH,
-])
+class Kernels:
+    def general_kernel(h,r):
+        return 315.0*((h**2 - r**2)**3)/(64*np.pi*(h**9))
 
-NORMALIZATION_DENSITY = (
-    (
-        315 * PARTICLE_MASS
-    ) / (
-        64 * np.pi * SMOOTHING_LENGTH**9
-    )
-)
-NORMALIZATION_PRESSURE_FORCE = (
-    -
-    (
-        45 * PARTICLE_MASS
-    ) / (
-        np.pi * SMOOTHING_LENGTH**6
-    )
-)
-NORMALIZATION_VISCOUS_FORCE = (
-    (
-        45 * DYNAMIC_VISCOSITY * PARTICLE_MASS
-    ) / (
-        np.pi * SMOOTHING_LENGTH**6
-    )
-)
+    def grad_gen(h,r):
+        return (945.0*((h**2 - r**2)**2)/(64*np.pi*(h**6)))
+    
+    def lapl_gen(h,r):
+        return (315.0*((h**2 - r**2))/(64*np.pi*(h**3)))
 
-def main():
-    n_particles = 1
+    def __pressure_kernel(h,r):
+        return 15.0*((h - r)**3)/(np.pi*(h**6))
+    
+    def __viscosity_kernel(h,r):
+        return -2*(r/h)**3 + (r/h)**2 + h/(2*r) - 1
 
-    positions = np.zeros((n_particles, 2))
-    velocities = np.zeros_like(positions)
-    forces = np.zeros_like(positions)
+def main(T,N, total, smoothing, iso, base, rho, bounce, viscosity):    #T total time, N number of teps per second
 
-    plt.style.use("dark_background")
-    plt.figure(figsize=FIGURE_SIZE, dpi=160)
+    x = np.zeros((total, 2))  #position
+    x = np.zeros((total, 2))   #positions at previous step for verlet integration
+    v = np.zeros_like(x)   #velocity
+    f = np.zeros_like(x)   #force
+    m = np.zeros(total)      #mass
+    p = np.zeros(total)       #particles
+    step = 1/N                      #for verlet
+    astep = step**2
 
-    for iter in tqdm(range(N_TIME_STEPS)):
-        if iter % ADD_PARTICLES_EVERY == 0 and n_particles < MAX_PARTICLES:
-            new_positions = np.array([
-                [10 + np.random.rand(), DOMAIN_Y_LIM[1]],
-                [15 + np.random.rand(), DOMAIN_Y_LIM[1]],
-                [20 + np.random.rand(), DOMAIN_Y_LIM[1]],
+    DOMAIN_X_LIM = np.array([smoothing, DOMAIN_WIDTH - smoothing,])
+    DOMAIN_Y_LIM = np.array([smoothing,DOMAIN_HEIGHT - smoothing,])
+
+    for i in range(total):
+        new_positions = np.array([
+                [np.random.uniform(0.0,50.0), DOMAIN_Y_LIM[1]],
             ])
+        new_velocities = np.array([
+                [0.0, np.random.normal(10.0,2.0)] 
+            ])
+        new_mass = np.array([np.random.normal(1.0,0.5)])
+        x = np.concatenate((x, new_positions), axis=0)
+        v = np.concatenate((v, new_velocities), axis=0)
+        m = np.concatenate((m,new_mass), axis= 0)
+
+    for i in range(int(T*N)):
+        
+        tree = neighbors.KDTree(x,8)
+        ids, dist = tree.query_radius(x,smoothing,return_distance=True,sort_results=True,)
+        rho = np.zeros(total)     #density
+        for k in range(total):
+            for j_in_list, j in enumerate(ids[k]):
+                rho[k] += m[k]*Kernels.general_kernel(smoothing, dist[k][j_in_list]) 
+            p = (rho - base)*iso
+        f = np.zeros(total)     #forces
+        for k in range(total):
+            for j_in_list, j in enumerate(ids[k]):
+                f[k] += m[k]*p[k]*Kernels.grad_gen(smoothing, dist[k][j_in_list])
+                f[k] += m[k]*v[k]*Kernels.lapl_gen(smoothing, dist[k][j_in_list])*viscosity
+        if i == 0:
+            x = x + (step)*v + 0.5*(astep)*f/rho[:, np.newaxis]
             
-            new_velocities = np.array([
-                [-3.0, -15.0],
-                [-3.0, -15.0],
-                [-3.0, -15.0],
-            ])
+        else :
+            tmp = x
+            x = 2*x - prev_x + (astep)*f/rho[:, np.newaxis]
+            prev_x = tmp
+        v = v + (step)*f/rho[:, np.newaxis]
+        out_of_left_boundary = x[:, 0] < DOMAIN_X_LIM[0]
+        out_of_right_boundary = x[:, 0] > DOMAIN_X_LIM[1]
+        out_of_bottom_boundary = x[:, 1] < DOMAIN_Y_LIM[0]
+        out_of_top_boundary = x[:, 1] > DOMAIN_Y_LIM[1]
 
-            n_particles += 3
+        v[out_of_left_boundary, 0]     *= bounce
+        x [out_of_left_boundary, 0]      = DOMAIN_X_LIM[0]
 
-            positions = np.concatenate((positions, new_positions), axis=0)
-            velocities = np.concatenate((velocities, new_velocities), axis=0)
-        
-        neighbor_ids, distances = neighbors.KDTree(
-            positions,
-        ).query_radius(
-            positions,
-            SMOOTHING_LENGTH,
-            return_distance=True,
-            sort_results=True,
-        )
+        v[out_of_right_boundary, 0]    *= bounce
+        x[out_of_right_boundary, 0]     = DOMAIN_X_LIM[1]
 
-        densities = np.zeros(n_particles)
+        v[out_of_bottom_boundary, 1]   *= bounce
+        x[out_of_bottom_boundary, 1]    = DOMAIN_Y_LIM[0]
 
-        for i in range(n_particles):
-            for j_in_list, j in enumerate(neighbor_ids[i]):
-                densities[i] += NORMALIZATION_DENSITY * (
-                    SMOOTHING_LENGTH**2
-                    -
-                    distances[i][j_in_list]**2
-                )**3
-        
-        pressures = ISOTROPIC_EXPONENT * (densities - BASE_DENSITY)
+        v[out_of_top_boundary, 1]      *= bounce
+        x[out_of_top_boundary, 1]       = DOMAIN_Y_LIM[1]
 
-        forces = np.zeros_like(positions)
 
-        # Drop the element itself
-        neighbor_ids = [ np.delete(x, 0) for x in neighbor_ids]
-        distances = [ np.delete(x, 0) for x in distances]
-
-        for i in range(n_particles):
-            for j_in_list, j in enumerate(neighbor_ids[i]):
-                # Pressure force
-                forces[i] += NORMALIZATION_PRESSURE_FORCE * (
-                    -
-                    (
-                        positions[j]
-                        -
-                        positions[i]
-                    ) / distances[i][j_in_list]
-                    *
-                    (
-                        pressures[j]
-                        +
-                        pressures[i]
-                    ) / (2 * densities[j])
-                    *
-                    (
-                        SMOOTHING_LENGTH
-                        -
-                        distances[i][j_in_list]
-                    )**2
-                )
-
-                # Viscous force
-                forces[i] += NORMALIZATION_VISCOUS_FORCE * (
-                    (
-                        velocities[j]
-                        -
-                        velocities[i]
-                    ) / densities[j]
-                    *
-                    (
-                        SMOOTHING_LENGTH
-                        -
-                        distances[i][j_in_list]
-                    )
-                )
-        
-        # Force due to gravity
-        forces += CONSTANT_FORCE
-
-        ### There is an error in the video, in that the gravity is divided by the density which
-        ### wrongly scales it. Uncommenting the below, and commenting the call above will fix
-        ### that but, also slightly changes the visual result of the simulation.
-        # forces += CONSTANT_FORCE * densities[:, np.newaxis]
-        
-
-        # Euler Step
-        velocities = velocities + TIME_STEP_LENGTH * forces / densities[:, np.newaxis]
-        positions = positions + TIME_STEP_LENGTH * velocities
-
-        # Enfore Boundary Conditions
-        out_of_left_boundary = positions[:, 0] < DOMAIN_X_LIM[0]
-        out_of_right_boundary = positions[:, 0] > DOMAIN_X_LIM[1]
-        out_of_bottom_boundary = positions[:, 1] < DOMAIN_Y_LIM[0]
-        out_of_top_boundary = positions[:, 1] > DOMAIN_Y_LIM[1]
-
-        velocities[out_of_left_boundary, 0]     *= DAMPING_COEFFICIENT
-        positions [out_of_left_boundary, 0]      = DOMAIN_X_LIM[0]
-
-        velocities[out_of_right_boundary, 0]    *= DAMPING_COEFFICIENT
-        positions [out_of_right_boundary, 0]     = DOMAIN_X_LIM[1]
-
-        velocities[out_of_bottom_boundary, 1]   *= DAMPING_COEFFICIENT
-        positions [out_of_bottom_boundary, 1]    = DOMAIN_Y_LIM[0]
-
-        velocities[out_of_top_boundary, 1]      *= DAMPING_COEFFICIENT
-        positions [out_of_top_boundary, 1]       = DOMAIN_Y_LIM[1]
-
+        plt.style.use("dark_background")
+        plt.figure(figsize=FIGURE_SIZE, dpi=160)
         if iter % PLOT_EVERY == 0:
             plt.scatter(
-                positions[:, 0],
-                positions[:, 1],
+                x[:, 0],
+                x[:, 1],
                 s=SCATTER_DOT_SIZE,
-                c=positions[:, 1],
+                c=x[:, 1],
                 cmap="Wistia_r",
             )
             plt.ylim(DOMAIN_Y_LIM)
@@ -200,4 +113,13 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    time = 10
+    N = 10
+    total = 50
+    smoothing_length = 9
+    bounce = -0.9
+    base = 1
+    iso = 20
+    rho = 1
+    viscosity = 0.001
+    main(time,N, total=total, smoothing=smoothing_length, iso=iso, base=base, rho = 1, bounce=bounce,viscosity=viscosity)
